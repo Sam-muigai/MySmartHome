@@ -23,9 +23,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.OutputStream
+import java.util.UUID
 
 const val SSP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
-const val BT = "blue_tootb"
+const val BT = "blue_tooth"
 
 /*
 * This class is responsible for
@@ -49,6 +50,8 @@ class BluetoothController(
     private var dataTransferService: TransferData? = null
 
     private var currentSocket: BluetoothSocket? = null
+
+    private var communicationSocket: BluetoothSocket? = null
 
     var isBtConnected = MutableStateFlow(false)
         private set
@@ -77,13 +80,12 @@ class BluetoothController(
             val APP_UUID = device.uuids[0].uuid
             currentSocket = bluetoothAdapter
                 ?.getRemoteDevice(device.address)
-                ?.createRfcommSocketToServiceRecord(APP_UUID)
+                ?.createRfcommSocketToServiceRecord(UUID.fromString(SSP_UUID))
             currentSocket?.let { bluetoothSocket ->
                 try {
                     // Just because it is open does not mean it is not null
                     bluetoothSocket.connect()
-                    val transferService = TransferData(bluetoothSocket)
-                    dataTransferService = transferService
+                    communicationSocket = bluetoothSocket
                 } catch (e: Exception) {
                     bluetoothSocket.close()
                     currentSocket = null
@@ -92,15 +94,28 @@ class BluetoothController(
                 }
                 emit(Result.ConnectionSuccessful)
                 Log.d(BT, "UUID : $APP_UUID")
-                Log.d(BT, "Transfer services on conn: $dataTransferService")
                 Log.d(BT, "Bluetooth socket on conn: ${bluetoothSocket.isConnected}")
             }
         }.flowOn(Dispatchers.IO)
     }
 
-    suspend fun sendMessage(message: String): Boolean {
-        Log.d(BT, "Transfer services: $dataTransferService")
-        return dataTransferService?.sendCommands(message) ?: false
+    suspend fun sendMessages(
+        message: String,
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
+            val outputStream: OutputStream? = communicationSocket?.outputStream
+            try {
+                Log.d(BT, "Bluetooth outputStream: $outputStream")
+                Log.d(BT, "CommunicationSocket: $communicationSocket")
+                outputStream?.write(message.toByteArray())
+                Log.d(BT, "Sent successfully")
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Log.d(BT, "Error : ${e.message}")
+                return@withContext false
+            }
+            true
+        }
     }
 
     fun getPairedDevices(): List<BluetoothDevice>? {
@@ -132,24 +147,6 @@ class TransferData(
                 emit(Result.IncomingCommands(message))
             }
         }.flowOn(Dispatchers.IO)
-    }
-
-    suspend fun sendCommands(
-        message: String,
-    ): Boolean {
-        return withContext(Dispatchers.IO) {
-            val outputStream: OutputStream = socket.outputStream
-            try {
-                Log.d(BT, "Bluetooth outputStream: $socket")
-                outputStream.write(message.toByteArray())
-                Log.d(BT, "Sent sdeviuccessfully")
-            } catch (e: Exception) {
-                e.printStackTrace()
-                Log.d(BT, "Error : ${e.message}")
-                return@withContext false
-            }
-            true
-        }
     }
 }
 

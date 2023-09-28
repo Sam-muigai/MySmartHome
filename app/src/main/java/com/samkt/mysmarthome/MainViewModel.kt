@@ -34,7 +34,7 @@ class MainViewModel(
 
     fun sendCommand(message: String) {
         viewModelScope.launch {
-            bluetoothController.sendMessage(message)
+            bluetoothController.sendMessages(message)
         }
     }
 
