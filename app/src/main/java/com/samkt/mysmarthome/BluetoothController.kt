@@ -5,22 +5,16 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
-import androidx.annotation.RequiresApi
-import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
@@ -47,28 +41,12 @@ class BluetoothController(
         bluetoothManager.adapter
     }
 
-    private var dataTransferService: TransferData? = null
-
     private var currentSocket: BluetoothSocket? = null
 
     private var communicationSocket: BluetoothSocket? = null
 
-    var isBtConnected = MutableStateFlow(false)
-        private set
-
-    private val stateChangedReceiver = BluetoothStateReceiver { isConnected, device ->
-        isBtConnected.update {
-            isConnected
-        }
-    }
-
     init {
         getPairedDevices()
-        val intentFilter = IntentFilter().also {
-            it.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-            it.addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
-        }
-        context.registerReceiver(stateChangedReceiver, intentFilter)
     }
 
     fun connectToDevice(device: BluetoothDevice): Flow<Result> {
@@ -76,14 +54,11 @@ class BluetoothController(
             if (!hasConnectionPermission()) {
                 throw SecurityException("Permission not granted")
             }
-            // not always work
-            val APP_UUID = device.uuids[0].uuid
             currentSocket = bluetoothAdapter
                 ?.getRemoteDevice(device.address)
                 ?.createRfcommSocketToServiceRecord(UUID.fromString(SSP_UUID))
             currentSocket?.let { bluetoothSocket ->
                 try {
-                    // Just because it is open does not mean it is not null
                     bluetoothSocket.connect()
                     communicationSocket = bluetoothSocket
                 } catch (e: Exception) {
@@ -92,9 +67,8 @@ class BluetoothController(
                     e.printStackTrace()
                     emit(Result.Error("Could not connect to device!!"))
                 }
-                emit(Result.ConnectionSuccessful)
-                Log.d(BT, "UUID : $APP_UUID")
-                Log.d(BT, "Bluetooth socket on conn: ${bluetoothSocket.isConnected}")
+                emit(Result.IsConnectionSuccessful(bluetoothSocket.isConnected))
+                Timber.d("Bluetooth socket on conn: " + bluetoothSocket.isConnected)
             }
         }.flowOn(Dispatchers.IO)
     }
@@ -105,25 +79,35 @@ class BluetoothController(
         return withContext(Dispatchers.IO) {
             val outputStream: OutputStream? = communicationSocket?.outputStream
             try {
-                Log.d(BT, "Bluetooth outputStream: $outputStream")
-                Log.d(BT, "CommunicationSocket: $communicationSocket")
+                Timber.d("Bluetooth outputStream: $outputStream")
+                Timber.d("CommunicationSocket: $communicationSocket")
                 outputStream?.write(message.toByteArray())
-                Log.d(BT, "Sent successfully")
+                Timber.d("Sent successfully")
             } catch (e: Exception) {
                 e.printStackTrace()
-                Log.d(BT, "Error : ${e.message}")
+                Timber.d("Error : " + e.message)
                 return@withContext false
             }
             true
         }
     }
 
-    fun getPairedDevices(): List<BluetoothDevice>? {
-        return bluetoothAdapter?.bondedDevices?.toList()
+    fun getPairedDevices(): Flow<List<BluetoothDevice>?> {
+        return flow {
+            while (true) {
+                val devices = bluetoothAdapter?.bondedDevices?.toList()
+                emit(devices)
+                delay(2_000)
+            }
+        }
     }
 
     private fun hasConnectionPermission(): Boolean {
-        return context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
     }
 }
 
@@ -151,40 +135,7 @@ class TransferData(
 }
 
 sealed interface Result {
-    object ConnectionSuccessful : Result
+    data class IsConnectionSuccessful(val isConnectionSuccessful: Boolean) : Result
     data class Error(val message: String) : Result
     data class IncomingCommands(val command: String) : Result
-}
-
-@RequiresApi(Build.VERSION_CODES.S)
-private fun hasScanPermission(context: Context): Boolean {
-    return ActivityCompat.checkSelfPermission(
-        context,
-        Manifest.permission.BLUETOOTH_SCAN,
-    ) == PackageManager.PERMISSION_GRANTED
-}
-
-class BluetoothStateReceiver(
-    private val onStateChanged: (isConnected: Boolean, BluetoothDevice) -> Unit,
-) : BroadcastReceiver() {
-
-    override fun onReceive(context: Context?, intent: Intent?) {
-        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra(
-                BluetoothDevice.EXTRA_DEVICE,
-                BluetoothDevice::class.java,
-            )
-        } else {
-            intent?.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-        }
-        when (intent?.action) {
-            BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                onStateChanged(true, device ?: return)
-            }
-
-            BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                onStateChanged(false, device ?: return)
-            }
-        }
-    }
 }

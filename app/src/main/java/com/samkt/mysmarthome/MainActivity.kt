@@ -13,9 +13,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,11 +31,13 @@ import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.samkt.mysmarthome.ui.theme.MySmartHomeTheme
 
@@ -40,6 +45,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var bluetoothManager: BluetoothManager
     private lateinit var bluetoothAdapter: BluetoothAdapter
+
+    @SuppressLint("InlinedApi")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         bluetoothManager = getSystemService(BluetoothManager::class.java)
@@ -57,6 +64,9 @@ class MainActivity : ComponentActivity() {
             val bluetoothPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 permissions[Manifest.permission.BLUETOOTH_CONNECT] == true && permissions[Manifest.permission.BLUETOOTH_SCAN] == true
             } else {
+                if (!bluetoothEnabled) {
+                    bluetoothEnableLauncher.launch(intent)
+                }
                 true
             }
             if (bluetoothPermissionGranted && !bluetoothEnabled) {
@@ -64,14 +74,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                ),
-            )
-        }
+        permissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_SCAN,
+            ),
+        )
         setContent {
             MySmartHomeTheme {
                 val mainViewModel = viewModel<MainViewModel>(
@@ -90,66 +98,88 @@ fun MainScreen(
     viewModel: MainViewModel,
 ) {
     val state = viewModel.uiState.collectAsState().value
-    MainScreenContent(
-        state = state,
-        onDeviceClicked = viewModel::connectToDevice,
-        onSendClicked = viewModel::sendCommand,
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@SuppressLint("MissingPermission")
-@Composable
-fun MainScreenContent(
-    modifier: Modifier = Modifier,
-    state: UiState,
-    onSendClicked: (message: String) -> Unit,
-    onDeviceClicked: (BluetoothDevice) -> Unit,
-) {
     val context = LocalContext.current
-    val message = rememberSaveable {
-        mutableStateOf("")
-    }
     LaunchedEffect(
-        key1 = state.isConnected,
+        key1 = state.errorMessage,
         block = {
-            if (state.isConnected) {
-                Toast.makeText(context, "Connection successful", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(context, "Disconnected", Toast.LENGTH_LONG).show()
+            state.errorMessage?.let { error ->
+                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
             }
         },
     )
-    if (state.isConnecting) {
-        CircularProgressIndicator()
-    } else {
-        Column(modifier = modifier.fillMaxSize()) {
-            LazyColumn(
-                content = {
-                    items(state.pairedDevices) { device ->
-                        DeviceCard(
-                            device = device,
-                            onDeviceClicked = onDeviceClicked,
-                        )
-                        Divider()
-                    }
-                },
-            )
-            TextField(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                value = message.value,
-                onValueChange = { text ->
-                    message.value = text
-                },
-            )
 
-            Button(
-                onClick = {
-                    onSendClicked(message.value)
-                },
-            ) {
-                Text(text = "SEND")
-            }
+    when {
+        state.isConnecting -> {
+            Loading()
+        }
+
+        state.isConnected -> {
+            SendCommandScreen(
+                onSendClicked = viewModel::sendCommand,
+                onValueChange = viewModel::onCommandChange,
+                value = viewModel.command,
+            )
+        }
+
+        else -> {
+            AvailableDevices(
+                state = state,
+                onDeviceClicked = viewModel::connectToDevice,
+            )
+        }
+    }
+}
+
+@SuppressLint("MissingPermission")
+@Composable
+fun AvailableDevices(
+    modifier: Modifier = Modifier,
+    state: UiState,
+    onDeviceClicked: (BluetoothDevice) -> Unit,
+) {
+    Column(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            content = {
+                item {
+                    Text(
+                        text = "PAIRED DEVICES",
+                        modifier = Modifier.padding(start = 8.dp),
+                        fontWeight = FontWeight.Bold,
+                        textDecoration = TextDecoration.Underline,
+                        fontSize = 18.sp,
+                    )
+                }
+                items(state.pairedDevices) { device ->
+                    DeviceCard(
+                        device = device,
+                        onDeviceClicked = onDeviceClicked,
+                    )
+                    Divider()
+                }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SendCommandScreen(
+    modifier: Modifier = Modifier,
+    onSendClicked: () -> Unit,
+    onValueChange: (String) -> Unit,
+    value: String,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(20.dp),
+    ) {
+        TextField(
+            modifier = Modifier.fillMaxWidth(),
+            value = value,
+            onValueChange = onValueChange,
+        )
+        Spacer(modifier = Modifier.height(15.dp))
+        Button(onClick = onSendClicked) {
+            Text(text = "SEND")
         }
     }
 }
@@ -165,9 +195,21 @@ fun DeviceCard(
             .clickable {
                 onDeviceClicked.invoke(device)
             }
-            .padding(16.dp),
+            .padding(8.dp),
     ) {
         Text(text = device.name ?: "No name")
-        Text(text = device.address ?: "No name")
+        Text(text = "MAC : ${device.address}")
+    }
+}
+
+@Composable
+fun Loading(
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator()
     }
 }
